@@ -1,0 +1,12 @@
+# Everything this code needs, and nothing else. Every extra package is one more
+# thing that can break a year from now when the analysis has to be re-run.
+#
+# Versions are the ones this was last run against, on Python 3.14.3.
+# Python 3.11 or newer is required; nothing here enforces that, so it is written
+# where a person installing the dependencies is already looking.
+
+duckdb==1.5.5          # every query over the full PatentsView tables
+pandas==3.0.5          # small result tables and plotting inputs only, never raw joins
+matplotlib==3.11.1     # figures. No seaborn, no plotly.
+PyYAML==6.0.3          # reads config/default.yaml
+pytest==9.1.1          # the tests

@@ -1,0 +1,30 @@
+# Data is never committed. None of it is redistributable, and all of it is
+# rebuildable from the sources named in README.md.
+data/
+*.parquet
+*.csv
+*.tsv
+*.dta
+*.zip
+*.xlsx
+*.pkl
+
+# Results and run logs are outputs, not source.
+outputs/
+logs/
+
+# Environment
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store

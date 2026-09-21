@@ -1,0 +1,1397 @@
+# ===========================================================================
+# Every analytical choice in this thesis is in this file.
+#
+# Code reads these values and hardcodes none of them. To change what the
+# analysis does, edit a value here and re-run — you should never need to open
+# a .py file.
+#
+# Each key says where it comes from:
+#   [TL n]  the advisor's task list, Task n     -> the highest-numbered
+#           docs/task_list_for_yaren*.md. It is reissued as the advisor sends new
+#           tasks, so this tag means "whichever version is current", not a fixed file.
+#   [TD §n] the research design, section n      -> docs/thesis_design.md
+#   [NEW]   neither document specifies it; the provisional value is recorded
+#           in notes/decisions.md and can be changed freely
+#   [C-n]   a numbered decision of my own in notes/decisions.md, with the
+#           reasoning and the rejected alternative. Each carries a status —
+#           PROVISIONAL, SETTLED, OPEN, SUPERSEDED — and names the key that
+#           reverses it. Mine, not the advisor's: [TL n] is the advisor's.
+#   [D-n]   a sub-decision inside one of those entries, cited beside its own
+#           number, as in [C-51 D106].
+#   [C-n, found]  the "found on the way" part of that entry: something the
+#           work turned up that was not asked for.
+#   [CP n]  a numbered CHECKPOINT in the task list; [item n] and the lettered
+#           forms ([TL 2c], [TL 4a]) are its items and sub-tasks.
+#
+# Pointers to docs/ and notes/ — here and throughout this file — name the FULL
+# thesis repository this code was extracted from, as do references to steps,
+# tests and config files that are not part of the extract. They are kept
+# because they record where a choice was made; they do not resolve here.
+#
+# Changing any value here changes the config hash, which changes the output
+# filenames. Old results are never overwritten.
+# ===========================================================================
+
+# This is the thesis's whole configuration, kept intact. The four scripts here
+# read the build and dominance blocks; the rest belong to steps not included.
+
+# Names the folder under outputs/ . Not part of the config hash: two configs
+# with different names but identical settings are the same analysis.   [NEW]
+config_name: default
+
+# Fixes every random draw: the living-inventor sample (Task 6), the fake
+# deaths (Task 8). Change it only to check that a result is not a fluke. [NEW]
+random_seed: 20260728
+
+
+# ---------------------------------------------------------------------------
+# DEBUG SWITCH
+# ---------------------------------------------------------------------------
+# true = restrict EVERYTHING to one CPC section, so a step takes a fraction of
+# the six or seven minutes a full one does. Every code path respects it. Debug
+# here; full runs are a deliberate change to false.
+# This IS part of the config hash, because it changes the numbers.
+sample_mode: false
+sample_cpc_section: A          # A = Human Necessities (contains pharma)
+
+
+# ---------------------------------------------------------------------------
+# WHERE FILES LIVE  (relative to the top of the repository — always run from there)
+# ---------------------------------------------------------------------------
+# Not part of the config hash: moving a folder does not change a result.
+paths:
+  raw_patentsview: data/raw/patentsview
+  raw_kjl:         data/raw/kjl
+  interim:         data/interim
+  # The other admission arm, read side by side by the Task 3c comparison and by
+  # nothing else. Under this config the comparison arm is grant-strict; under
+  # config/task3c_grant_strict.yaml the two swap, so the comparison reads the
+  # same pair of directories whichever arm it is run from.        [TL 3c]
+  comparison_interim: data/interim_grant_strict
+  # The configs the floor-and-margin comparison step (06) reads side by side. A
+  # list of files and nothing else, like comparison_interim above: out of the
+  # hash, because which runs a table compares is not an analytical choice.
+  floor_robustness_configs:
+    - config/task3c_grant_strict.yaml
+    - config/default.yaml
+    - config/floor_p25_pooled.yaml
+    - config/floor_p50_pooled.yaml
+    - config/floor_p25_per_year.yaml
+  processed:       data/processed
+  outputs:         outputs
+  logs:            logs/runs
+
+
+# ---------------------------------------------------------------------------
+# SOURCE FILE NAMES
+# ---------------------------------------------------------------------------
+# Parquet names are the zip names with .zip removed, because that is what
+# step 01 produces (g_patent.tsv.zip -> g_patent.tsv.parquet). The KJL files
+# are read as CSV, since Harvard Dataverse ships them uncompressed.
+tables:
+  patents:      g_patent.tsv.parquet
+  application:  g_application.tsv.parquet
+  inventors:    g_inventor_disambiguated.tsv.parquet
+  assignees:    g_assignee_disambiguated.tsv.parquet
+  cpc_current:  g_cpc_current.tsv.parquet
+  cpc_at_issue: g_cpc_at_issue.tsv.parquet
+  citations:    g_us_patent_citation.tsv.parquet
+  locations:    g_location_disambiguated.tsv.parquet
+  # PatentsView's own crosswalk between disambiguation releases. One row per
+  # inventor slot, one column per past release. This is what lets a KJL
+  # identity be READ off rather than reconstructed — see columns below.
+  persistent_inventor: g_persistent_inventor.tsv.parquet
+  kjl_ages:      inventor_age_score_gender.csv
+  kjl_deaths:    inventor_deathdate.csv
+  kjl_crosswalk: inventorid_patentid_crosswalk.csv
+
+
+# ---------------------------------------------------------------------------
+# COLUMN NAMES
+# ---------------------------------------------------------------------------
+# PatentsView renames columns between releases. Keeping the names here means a
+# rename is a one-line edit rather than a search through every script.
+#
+# NOTE — two incompatible inventor ID systems:
+#   PatentsView (current):  fl:we_ln:jiang-165
+#   KJL (2018 vintage):     3930273-1   = patent number + inventor sequence
+# They cannot be joined directly, and there are TWO ways across:
+#   1. anchor    — look up who currently sits in inventor slot 1 of patent
+#                  3930273. Assumes slot order never changed between releases.
+#   2. crosswalk — read both IDs off one row of PatentsView's own persistent
+#                  table. Assumes nothing. The 3930273-1 format is PatentsView's
+#                  OWN 20181127 identifier, not something KJL made up.  [C-23]
+# Both are computed and stored side by side; which one is authoritative is a
+# Checkpoint 2 decision. See notes/decisions.md.
+columns:
+  patent_id:          patent_id
+  patent_type:        patent_type
+  patent_date:        patent_date          # grant date
+  withdrawn:          withdrawn
+  filing_date:        filing_date          # application date — the date rule
+  inventor_id:        inventor_id          # PatentsView disambiguated ID
+  inventor_sequence:  inventor_sequence
+  assignee_id:        assignee_id
+  assignee_sequence:  assignee_sequence
+  location_id:        location_id
+  cpc_sequence:       cpc_sequence
+  cpc_section:        cpc_section          # e.g. A
+  cpc_class:          cpc_class            # e.g. A61
+  cpc_subclass:       cpc_subclass         # e.g. A61K
+  cpc_group:          cpc_group            # e.g. A61K31/00
+  cpc_type:           cpc_type             # inventional / additional
+  # Only g_cpc_at_issue has this: the CPC scheme VERSION a classification was
+  # made under, e.g. 2014-12-01. Task 2b item 6 uses it to date when a CPC code
+  # was created, which no other column in this project can say — g_cpc_current
+  # records today's classification with no history at all.       [item 6, C-35]
+  cpc_version:        cpc_version_indicator
+  citation_patent_id: citation_patent_id
+  citation_date:      citation_date
+  # Who put the reference on the patent: "cited by applicant", "cited by
+  # examiner", "cited by other", or null. Task 2c item 3 needs it for the
+  # examiner-versus-applicant diagnostic, and it is the only column that can
+  # show how much of a "dependence" measure is the examiner's reading of prior
+  # art rather than the inventor's. Populated for 0.0% of grant years through
+  # 2001, 95.2% in 2002 and 100% after, so the diagnostic is empty for two
+  # thirds of the death window.                                 [TL 2c, C-46]
+  citation_category:  citation_category
+  # --- the persistent crosswalk between disambiguation releases ------------
+  # Each column holds the inventor ID that this slot had in one past release,
+  # and the release date is part of the column NAME. So these are not cosmetic:
+  # naming the wrong column silently links KJL to the wrong generation of
+  # identities. Step 02 checks the second one against the inventor table on
+  # every run and refuses to continue if it does not match (C-23).
+  #
+  # persistent_kjl_vintage is fixed, because KJL is a frozen Dataverse deposit.
+  #
+  # 20181127 AND NOT 20180528. KJL's paper and this repository both said the
+  # data was built on the 20180528 release. It was not. Measured against every
+  # release column in turn, KJL's identities appear in 20181127 at 99.95%
+  # (1,857,526 of all 1,858,516) and in 20180528 at only 91.10%.
+  #
+  # The 990 that 20181127 misses are, every one of them, anchored on a
+  # Statutory Invention Registration — a patent type no early PatentsView
+  # disambiguation covered at all — so across the 1,857,526 NON-SIR identities
+  # the match is 100.0000%. Both numbers are right; they differ only in whether
+  # the SIRs are in the denominator, and 1,857,526 appears in both because
+  # 1,858,516 - 990 = 1,857,526.
+  #
+  # The neighbouring releases all score 90-91%, which is high enough to look
+  # correct if you only ever check the one you expect.            [C-23]
+  #
+  # persistent_current_vintage MUST BE UPDATED whenever PatentsView is
+  # re-downloaded — a new release adds a new last column.
+  persistent_kjl_vintage:     disamb_inventor_id_20181127
+  persistent_current_vintage: disamb_inventor_id_20251231
+
+  kjl_inventor_id:    inventor_id          # the OLD-format ID inside KJL files
+  kjl_birth_year:     birthyear            # in the ages file
+  kjl_death_birth_year: birth_year         # in the deaths file (different name)
+  kjl_death_date:     death_date
+  kjl_death_year:     death_year
+  kjl_death_source:   source
+  kjl_death_score:    score
+
+
+# ---------------------------------------------------------------------------
+# WHICH PATENTS EXIST AT ALL                                          [TL 1]
+# ---------------------------------------------------------------------------
+patent_universe:
+  # Date a patent by when the inventive act happened, not when the office
+  # finished examining it. Grant date mixes in examination delay, which varies
+  # by technology and by decade.                                      [TL 1]
+  date_by: application                    # application | grant
+
+  # Design and plant patents are patents in law but not inventions in the
+  # sense this design is about; reissues would double-count.     [NEW, C-1]
+  #
+  # THIS IS THE SWITCH that decides whether Statutory Invention Registrations
+  # count. They are excluded, and deliberately: a SIR is a defensive
+  # publication that confers no exclusive right, and of the 1,810 in this data
+  # 71 per cent belong to the US Army, Navy and Air Force. Including them would
+  # add government disclosure to a measure meant to capture invention.
+  # To include them, add 'statutory invention registration' to this list —
+  # nothing else needs to change.                                [NEW, C-21]
+  patent_types: [utility]
+
+  # NOT "when the data starts" — filing dates run back to 1944. This is the first
+  # filing year whose DENOMINATOR IS COMPLETE. A grant date is always on or after
+  # the filing date and this data holds every patent granted from 1976, so a
+  # patent filed in 1976 or later is here if it was ever granted; one filed in
+  # 1975 may have been granted in 1975 and be absent. Earlier years are truncated
+  # on grant lag, severely: 68,052 patents survive from filing year 1975 and 534
+  # from 1970, against roughly 100,000 actually filed in each. A share needs the
+  # whole field in its denominator, so those years would not be noisy — they
+  # would be wrong by orders of magnitude, inflated for whoever happened to hold
+  # slow-granted patents. See notes/decisions.md D-1.               [TL 1]
+  first_year: 1976
+
+  # Later application years are truncated: a patent filed in 2024 may not be
+  # granted yet, and only granted patents are in this data. Never treat a
+  # year after this as complete.                                      [TL 1]
+  #
+  # THIS VALUE IS NOT A MEASUREMENT AND 2022 IS NOT COMPLETE. Measured at Task 2b
+  # item 4 (C-32), correcting for the fact that slow-granted patents are ABSENT
+  # from this data rather than merely undated: filing year 2022 is ~73% complete,
+  # 2021 ~86%, 2020 ~93%, 2019 ~97%, 2018 ~98%. Grants in this release stop at
+  # 2025, so a 2022 filing has had three years to appear and the median wait is
+  # between two and three. The name of this key therefore overstates what it
+  # holds: it is the last year KEPT (see drop_incomplete_filing_years below),
+  # not the last year complete.
+  #
+  # Left at 2022 deliberately. Lowering it would delete filing years 2020-2022
+  # from Task 1 and the matching field-years from Task 2 — descriptives nothing
+  # downstream reads — and would pre-empt the Checkpoint 2 decision it belongs
+  # to, because the check in src/lib/config.py then forces deaths.year_max down
+  # with it. Item 4's note tabulates that trade-off in usable deaths.
+  # DO NOT read a count from a filing year at or near this one as a denominator
+  # or as an outcome without inflating it. See outputs/default/task2b_followups.md
+  # item 4.                                                     [NEW, C-32]
+  filings_complete_through: 2022
+
+  # Withdrawn patents are administrative artefacts, not inventions.   [NEW]
+  drop_withdrawn: true
+
+  # Application years after filings_complete_through are real but incomplete:
+  # patents filed then are still being granted, so counting them would show a
+  # collapse in inventive activity that is an artefact of the data ending.
+  # Nothing in this design needs them (the last death is 2016 + 5 years).  [TL 1]
+  drop_incomplete_filing_years: true
+
+  # null = no geographic restriction. Every patent here is US-granted, but its
+  # inventors may live anywhere, and restricting the denominator to US
+  # inventors would redefine "the field" as its US part.        [NEW, C-2]
+  inventor_country: null
+
+
+# ---------------------------------------------------------------------------
+# THE CITATION TABLE                                             [TL 2c, C-46]
+# ---------------------------------------------------------------------------
+# Two repairs to how 01_citations.parquet is built, both found while scoping
+# Task 2c and both invisible in a histogram. They are keys rather than
+# unconditional code for the reason kjl_link.repair_sir_patent_ids is (C-21):
+# a repair that cannot be switched off cannot be audited against the unrepaired
+# numbers.
+citations:
+  # The raw file holds 152,631,929 rows against 152,391,752 distinct
+  # (citing, cited) pairs, and the built table 121,673,979 against 121,477,265
+  # — 196,714 duplicate edges. REACH is immune, because it counts distinct
+  # citing patents. KNOWLEDGE-BASE SHARE counts citation ROWS, so every
+  # duplicate is a unit of dependence that does not exist. That asymmetry is
+  # why the defect survived: the measure that would have exposed it is the one
+  # being added.                                                     [C-46]
+  deduplicate_edges: true
+
+  # 240,051 raw (citing, cited) pairs appear more than once, and 111,875 of
+  # them DISAGREE about citation_category — but only if "no category recorded"
+  # counts as one of the readings, which is how that count was taken.
+  #
+  # RE-MEASURED 2026-08-11: just 209 of the 240,051 carry two different
+  # category VALUES, i.e. the same edge recorded as both applicant-cited and
+  # examiner-cited. The other 111,666 are one row with a category against one
+  # row with none, where the populated reading is the only reading there is.
+  # The wording above described the 209 and attached the 111,875 figure to it.
+  # This WEAKENS the case for drop_conflicts, which discards the category on
+  # 111,875 pairs to avoid guessing when on 111,666 of them there is nothing
+  # to guess. Left as written rather than switched: the key feeds only the
+  # examiner diagnostic, which the task list calls "never a treatment
+  # definition", so it is a question for the advisor and not a build decision.
+  #
+  # Deduplicating still needs a rule for which reading survives, and the rule
+  # is an economics judgement:
+  # "cited by examiner" is meant to proxy for prior art the applicant did not
+  # volunteer, so the choice decides whether an ambiguous edge counts as the
+  # examiner having independently found the star's work.
+  #
+  #   any_examiner    examiner if ANY record says examiner — treats an examiner
+  #                   citation as evidence that cannot be un-said
+  #   all_examiner    examiner only if EVERY record agrees — the conservative
+  #                   reading, which will understate examiner involvement
+  #   drop_conflicts  conflicting pairs carry a null category and are excluded
+  #                   from the examiner diagnostic entirely, and counted in the
+  #                   funnel so the exclusion is visible
+  #
+  # This key is read ONLY by the examiner diagnostic. No treatment definition
+  # depends on it, per the task list: examiner-only reach is "a diagnostic,
+  # never a treatment definition".                                   [TL 2c]
+  #
+  # drop_conflicts was chosen, not defaulted: the diagnostic exists to ask how
+  # much of a dependence measure is really the examiner's reading of prior art,
+  # so guessing on the ambiguous edges contaminates the exact quantity being
+  # measured. The cost is accepted — the diagnostic covers fewer edges, on top
+  # of being empty before grant year 2002 anyway. any_examiner and all_examiner
+  # are kept because together they bound the examiner share from above and
+  # below, which is the useful thing to report when the middle is unknowable.
+  category_conflict_rule: drop_conflicts  # any_examiner | all_examiner | drop_conflicts
+
+
+# ---------------------------------------------------------------------------
+# HOW A PATENT IS CREDITED TO A PERSON                                [TL 1]
+# ---------------------------------------------------------------------------
+counting:
+  # A patent with n inventors counts 1/n for each. Shares within a field then
+  # sum to 1, and a person on large teams cannot accumulate dominance simply
+  # by being one of many.                                             [TL 1]
+  # The FULL alternative is not a rebuild. Task 2b item 9 (C-38): the full-count
+  # share and rank are not stored, but the numerator is —
+  # inventor_patents_in_window in 02_inventor_field_years_<width>.parquet — so
+  # both derive from the stored table in one pass, through
+  # full_count_columns_sql() in src/steps/task2b/item9.py. Switching this key
+  # instead would OVERWRITE the fractional tables, because data/interim/
+  # filenames carry no hash, so the two arms cannot coexist on disk.
+  #
+  # It matters more than a robustness check usually does: full counting names a
+  # different top inventor in 53% / 56% / 57% of field-years, sharing nobody at
+  # all in 45% / 38% / 23%, and roughly halves every Task 3 cell.  [NEW, C-38]
+  method: fractional                      # fractional | full
+
+  # The tiny-field exclusion is always a plain head count, whatever the
+  # counting method above.                                            [TL 3]
+  #
+  # WARNING: NOTHING READS THIS KEY. build_field_patent_counts() in
+  # src/03_measure_dominance.py writes count(*), which is the `full` reading,
+  # hardcoded — so the value below agrees with the code by luck and setting it
+  # to `fractional` would change nothing while appearing to. Step 03 therefore
+  # REFUSES any other value rather than ignoring it. Deleting the key is the
+  # right end state and moves the config hash, so it is queued for the
+  # Checkpoint 2 freeze. Found at Task 2b item 9.                [NEW, C-38]
+  field_size_method: full
+
+
+# ---------------------------------------------------------------------------
+# HOW A PATENT IS ASSIGNED TO A FIELD                                 [TL 1]
+# ---------------------------------------------------------------------------
+cpc:
+  # Most patents carry several CPC codes. "primary" keeps only the examiner's
+  # main classification. This choice moves every share, rank and field size,
+  # so it is fixed here once rather than improvised later.            [TL 1]
+  assignment: primary                     # primary | all
+  #
+  # THIS NUMBER BELONGS TO THE TABLE BELOW, NOT TO CPC. g_cpc_current numbers
+  # its codes from 0; g_cpc_at_issue numbers them from 1. So the two keys are
+  # not independent: setting table: at_issue while leaving this at 0 makes the
+  # primary-code rule match no rows at all, every patent loses its field, and
+  # the run fails several joins later with an empty universe rather than at the
+  # setting that caused it. Measured at Task 2b item 5.          [NEW, C-33]
+  primary_sequence: 0                     # sequence 0 marks the primary code
+
+  # WARNING, and an open question for the advisor (question 1).
+  # "current" reflects reclassifications made by the patent office at ANY later
+  # date — including after the death we use as the shock. A patent can
+  # therefore enter or leave the star's field for administrative reasons that
+  # postdate the treatment. "at_issue" is what was known at grant and is immune
+  # to this, but is less complete. Chosen: current, with at_issue going into
+  # the pre-registered variant grid.                            [NEW, C-3]
+  #
+  # HOW MUCH LESS COMPLETE, measured at Task 2b item 5 (C-33): CPC replaced the
+  # US classification in 2013, so at_issue covers 0.0% of filings before 2000,
+  # 4.0% of the 2000s and 86.3% of the 2010s, against 100.0% for current at
+  # every decade. Switching tables to avoid the look-ahead would cost
+  # essentially the whole pre-2013 sample, which is most of the death window.
+  table: current                          # current | at_issue
+
+  # Only used when assignment is "all": does a patent count once in each of its
+  # fields, or 1/k across its k codes?                          [NEW, C-4]
+  multi_code_weighting: duplicate         # duplicate | fractional
+
+
+# ---------------------------------------------------------------------------
+# WHAT COUNTS AS A FIELD                                            [TL 2]
+# ---------------------------------------------------------------------------
+# The width of a field mechanically changes everyone's share, so all three are
+# computed and compared. Validated against the registry in src/lib/fields.py,
+# not against a list written into the code: adding a new strategy file makes it
+# a legal value here automatically.
+fields:
+  strategy: cpc_subclass                  # cpc_class | cpc_subclass | cpc_main_group
+  robustness_strategies: [cpc_class, cpc_subclass, cpc_main_group]
+  # Planned, not built, not authorised yet:
+  #   embedding_neighborhood  (PatentSBERTa)       [TD §5.1]
+  #   pharma_target_class     (biological target)  [TD §5.4]
+
+
+# ---------------------------------------------------------------------------
+# MEASUREMENT WINDOWS
+# ---------------------------------------------------------------------------
+windows:
+  # An inventor's share is measured over the field's patents filed in years
+  # t-4 through t.                                                    [TL 2]
+  dominance_window_years: 5
+  pre_years:  5                           # panel years before the death  [TL 1]
+  post_years: 5                           # panel years after the death   [TL 1]
+
+
+# ---------------------------------------------------------------------------
+# WHICH DEATHS ARE USABLE                                        [TL 1, TL 4]
+# ---------------------------------------------------------------------------
+deaths:
+  # 1986 is not a free choice: 1976 (data start) + 5 (to build the first
+  # dominance window) + 5 (pre-death panel years) = 1986. It is written out so
+  # you can see the sample period without doing arithmetic, and the code
+  # recomputes it and RAISES if the two disagree — so changing a window length
+  # cannot silently leave the pre-period half empty.                  [TL 1]
+  year_min: 1986
+  # 2016 needs filings through 2021 as its outcome. Those five years are NOT all
+  # complete: 2021 is ~86% granted and 2020 ~93% (Task 2b item 4, C-32). The
+  # check below enforces year_max <= filings_complete_through - post_years, which
+  # is right arithmetic on a value that was never measured, and it currently
+  # permits 2017 — so this 2016 is already one year more conservative than the
+  # config demands. Whether to trim further is a Checkpoint 2 decision: the cost
+  # is 19,785 usable deaths per year removed, and the reason it may not be
+  # necessary is that truncation is a calendar-time shortfall that a matched
+  # contemporaneous control absorbs to first order. Not to second order —
+  # grant lag differs by technology by ~10 points at four years.  [NEW, C-32]
+  year_max: 2016
+  check_window_consistency: true
+
+  # "Premature". Strict: age < 60, because KJL gives a birth YEAR, not a date,
+  # so ages are integers and this boundary moves the count.     [TL 4, C-5]
+  age_at_death_max: 60
+  age_at_death_inclusive: false
+  age_at_death_robustness: [60, 65]                                  # [TL 4]
+
+  # A filing this recent rules out someone who had long since withdrawn from
+  # work — though not a short final illness.                          [TL 5]
+  actively_inventing_required: false
+  actively_inventing_within_years: 5
+  actively_inventing_robustness_years: [3, 5]
+
+  # ---- Turning candidate matches into deaths ---------------------------
+  # The KJL death file is NOT a list of deaths. It is 8.46 million candidate
+  # match records for 535,120 inventors, because KJL searched six genealogical
+  # sources per location-inventor pair. 61% of inventors have records that
+  # disagree about the year of death. The 206,589 figure in the research design
+  # is KJL's own resolved count, from a rule we do not have.
+  #
+  # Evidence for these defaults is in outputs/default/data_inspection.md.
+  # Advisor question 17. Both keys below change the treated sample directly.
+  #
+  #   score floor   inventors with a death   died 1986-2016   sources agree
+  #        any            535,120               501,768          46.9%
+  #        8              260,967               242,859          71.3%
+  #       16              169,641               158,111          71.7%
+  #       24               65,070                59,787          97.4%
+  #
+  # Set to 0 on 2026-07-31 (C-26, superseding C-12): keep every candidate
+  # record and let the tie rule below resolve the disagreements, rather than
+  # discarding two thirds of the deceased up front. The comparison in
+  # src/02_build_patent_tables.py is `score >= floor` and the lowest score
+  # present in the file is 0.0, so this floor drops nothing — the funnel step
+  # death_match_score_floor is now a no-op that is kept because raising the
+  # floor again must stay a config edit rather than a code change.
+  min_source_score: 0                                     # [C-26, was 16]
+
+  # What to do when an inventor's best-scoring records still disagree.
+  # modal_then_earliest = the year most of the best records give, ties broken
+  # by the earliest. The ambiguity is always STORED as a flag either way, so a
+  # later step can drop these without rebuilding.               [NEW, C-13]
+  tie_rule: modal_then_earliest    # modal_then_earliest | earliest | latest | drop
+
+  # NOTE: there is no suddenness filter and there cannot be one. The design
+  # asks for sudden deaths in three places (§5.1, §5.2, §6), but KJL carries no
+  # cause of death. See notes/decisions.md B-3 and advisor question 10.
+
+
+# ---------------------------------------------------------------------------
+# LINKING KJL IDENTITIES TO PATENTSVIEW IDENTITIES                     [NEW]
+# ---------------------------------------------------------------------------
+# KJL is built on the patent_20181127 disambiguation — NOT 20180528, which is
+# what its paper says; see columns.persistent_kjl_vintage above and C-23. Its
+# identifier '3930273-1' is PatentsView's own identifier from that release, and
+# means patent 3930273, inventor position 1 — counted from ONE, where current
+# PatentsView counts inventor_sequence from ZERO. 99.9% of KJL identifiers
+# resolve under the one-based reading and 46% under the other, so this is a
+# measured fact rather than a preference; the key exists in case a future KJL
+# vintage changes convention.
+#
+# The two vintages do not agree about who people are. For inventors with 10 or
+# more patents — the only people who could dominate a field — they agree on the
+# patent set only 28.3% of the time. Advisor question 18.
+# (28.1% before the SIR identifier repair of 2026-07-30, C-21.)
+kjl_link:
+  id_suffix_base: 1                       # 1 = KJL counts inventors from one
+
+  # false = keep inventors whose patent set the two vintages disagree about,
+  # and store the disagreement as a flag, so the sensitivity can be reported
+  # rather than silently baked into the sample.                 [NEW, C-14]
+  require_vintage_agreement: false
+
+  # KJL writes Statutory Invention Registration numbers as 'H', six digits and
+  # one CHECK CHARACTER — H0000019 is SIR H1 — where PatentsView writes 'H1'.
+  # The two never join, with no error and no warning.
+  #
+  # Leaving this false reproduces the defect found on 2026-07-30: 1,810 SIRs
+  # fail to join, 830 KJL identities anchored on one cannot be resolved and are
+  # dropped, and 2,833 inventors are recorded as disagreeing across
+  # disambiguation vintages for no reason but the format. It exists as a switch
+  # only so that the pre-repair numbers can be reproduced on demand.
+  #
+  # This governs IDENTITY MATCHING only. Whether SIRs COUNT as patents is a
+  # separate question, and it is already settled one line at a time in
+  # patent_universe.patent_types above.                          [NEW, C-21]
+  repair_sir_patent_ids: true
+
+
+# ---------------------------------------------------------------------------
+# BIRTH YEARS: ONE ELIGIBILITY GATE, THEN TWO RULES              [TL 1, C-25]
+# ---------------------------------------------------------------------------
+# The task list asks for two birth-year lists, a strict one and a looser one,
+# and defines strict as "the two files agree". Until 2026-07-31 this repository
+# could not take that literally and implemented strict as "at least two of the
+# four web sources inside the AGES file agree" (old C-6). That reading is now
+# withdrawn. "The two files" means the ages file and the DEATH file, which is
+# the only reading under which they are two files — and it carries a
+# consequence the task list does not state: the test needs a death record, so
+# it has no analogue for anyone still alive and cannot define a control group.
+#
+# Hence one gate and two rules:
+#
+#   STEP 0   eligibility, everyone. The inventor's PREFERRED birth year — KJL's
+#            single reconciled value from the heuristics in their Section 4,
+#            the `birthyear` column, NOT the four source-specific years — must
+#            exist and must carry a positive match score.
+#   RULE A   "loose". Assigns a year to everyone, so it is the only rule that
+#            can cover treated and control alike. Deceased: the birth year in
+#            their death record, falling back to the preferred year when the
+#            databank supplies none. Everyone else: the preferred year.
+#   RULE B   "strict". Deceased only. The death record's birth year must fall
+#            within `rule_b_tolerance_years` of the preferred year.
+#
+# The two are stored side by side as birth_year_loose and birth_year_strict,
+# and birth_year_strict is null for the living — "not applicable" is recorded
+# as a different fact from "failed the test" (passes_rule_b is null too).
+birth_years:
+  # ---- STEP 0 — eligibility, applied to every inventor -------------------
+  # The ages file scores SOURCES, not the reconciled year: there are four
+  # scores (radaris, spokeo, beenverified, peoplefinders) and one `birthyear`.
+  # So the score tested is the best of the four. A positive score means the
+  # inventor was matched on at least one geographic or middle-name criterion
+  # beyond first and last name; zero or negative means a name mismatch, no age
+  # found, several equally-scored matches, or an unspecified error.
+  #
+  # An inventor appears once per city they lived in and 148,800 of them score
+  # differently across those rows, so the best row wins: if any location match
+  # identified the person, the person was identified.
+  #
+  # 1,643,968 of 1,858,516 inventors have a preferred birth year at all, and
+  # 1,608,887 of those also clear this gate.                    [NEW, C-25]
+  eligibility_min_score: 0.0
+  eligibility_score_inclusive: false      # false = strictly greater than
+
+  # ---- RULE B — how close the two files must be --------------------------
+  # NOT zero, and the data says why. Among the 147,594 Step-0-eligible deceased
+  # inventors at the death-score floor below, the smallest gap between the death
+  # record's birth year and the preferred year is 1 year for 78,742 of them
+  # against exactly 0 for only 49,642. The offset is systematic rather than
+  # noise: the web directories report an AGE, so the birth year derived from it
+  # is short by one for anyone whose birthday had not yet passed when the page
+  # was scraped. An exact-agreement rule would discard most genuine matches; 2
+  # covers the offset with one year to spare and passes 139,634 of the
+  # deceased, 94.6%. The full distribution is regenerated on every run into
+  # outputs/<config>/task1_setup_note.md.                       [NEW, C-25]
+  rule_b_tolerance_years: 2
+
+  # ---- WHICH RULE THE TREATED SAMPLE USES --------------------------------
+  # loose, per Task 4a: "Use the looser birth-year list from Task 1 for the
+  # ages." Treated inventors get verified by hand from obituaries later, which
+  # state age at death, so being strict now only costs us events. Rule B is the
+  # robustness check, not the baseline.
+  #
+  # There is deliberately NO general_pool_rule key to match this one. Rule B
+  # requires a death record and so cannot assign a year to a living inventor at
+  # all; the general pool has no choice but Rule A.                    [TL 1]
+  treated_pool_rule: loose                # strict | loose
+  # The top code of the "N or more" row in the birth-year gap table. It must
+  # sit STRICTLY ABOVE rule_b_tolerance_years, because at any tolerance >= this
+  # value the row that decides pass from fail fuses into "N or more" in the very
+  # table whose adjacent prose calls itself the argument for that tolerance.
+  # The same literal was typed again in 00b_inspect_raw.py, so two reports of
+  # one distribution could diverge silently. Step 02 raises if it is too low.
+  gap_table_top_code: 6                                          # [C-44]
+
+
+
+# ---------------------------------------------------------------------------
+# DOMINANCE                                                      [TL 2, TL 3]
+# ---------------------------------------------------------------------------
+# Dominance is the continuous treatment dose, not merely a sample filter.
+# Shares, ranks and margins are always STORED continuous; cutoffs are applied
+# only when the sample is selected.
+dominance:
+  metric: patent_share                    # patent_share | citation_share
+
+  # ---- WHICH YEARS GET A DOMINANCE MEASUREMENT                    [TL 2] ----
+  # The window is backward-looking: years t-4 through t, i.e. t minus
+  # (windows.dominance_window_years - 1) through t.
+  #
+  # A window at 1976 would cover ONE year, not five, so the share it produces is
+  # a different statistic wearing the same name. The default is therefore the
+  # first year with a complete window: patent_universe.first_year +
+  # windows.dominance_window_years - 1 = 1980. Nothing is lost — the earliest
+  # usable death is 1986. Set to 1976 to compute partial windows as well;
+  # window_first_year is stored on every row either way, so a partial window is
+  # always visible rather than inferred.                        [NEW, C-15]
+  first_compute_year: 1980
+  last_compute_year: 2022                 # = patent_universe.filings_complete_through
+
+  # ---- TIES AT THE TOP OF A FIELD                              [NEW, C-16] ----
+  # Ties at rank 1 are not a curiosity, they are common: 17.2% of field-years at
+  # subclass and 39.5% at main group, measured on the full data. The mechanism is
+  # fractional counting — in a thin field-year everyone's window weight is a
+  # small ratio like 1.0 or 0.5, and exact equality at the top is ordinary.
+  #
+  #   competition   tied inventors all take rank 1, the next takes rank k+1
+  #   dense         tied inventors all take rank 1, the next takes rank 2
+  #   unique_by_id  exactly one rank-1 row, tie broken by the lower inventor_id
+  #
+  # Whichever is chosen, n_tied_at_rank is stored on every row, so no rule can
+  # hide a tie. The dominance MARGIN of a tied top is 1.0 under all three: if two
+  # people are exactly level, nobody towers over anybody.
+  rank_tie_rule: competition       # competition | dense | unique_by_id
+
+  # Two weights that are mathematically equal can differ in the last bit of
+  # floating point (1/3 + 1/3 + 1/3 is not 1.0), which would silently turn a real
+  # tie into a rank ordering. Window weights are rounded to this many decimals
+  # before ranking. Any real difference between two inventors is many orders of
+  # magnitude larger than 1e-9.                                 [NEW, C-16]
+  weight_rounding_decimals: 9
+
+  # ---- WHEN THERE IS NO RUNNER-UP                              [NEW, C-17] ----
+  # A field-year with exactly one inventor has no #2 to divide by (131 such
+  # field-years at subclass, measured 2026-08-02 — this said 151, from a run
+  # predating the SIR repair of C-21). Task 2b item 1 shows that this is the
+  # same set as the field-years whose top share is exactly 100%, and that the
+  # 100-patent floor removes every one of them.
+  #   missing  store no margin at all, and record has_runner_up = false
+  #   cap      store margin_cap, which puts the flimsiest field-years in the
+  #            project at the very top of the margin distribution
+  margin_when_no_runner_up: missing       # missing | cap
+
+  # ---- CITATION SHARE                                                [TL 6] ----
+  # false for Task 2. Citation share is a Task 6 measure, two checkpoints away,
+  # and computing it honestly means counting only citations MADE BY year t —
+  # a second, much heavier build over the 1.5 GB citation table. Confirmed with
+  # the advisor 2026-07-28: patent share only for Checkpoint 1.  [NEW, C-18]
+  compute_citation_share: false
+
+  citation_share:
+    # Forward citations accumulate for decades. Counting them to the present
+    # would let post-death events decide who was dominant BEFORE the death —
+    # a look-ahead leak inside the treatment variable itself.   [NEW, C-7]
+    count_citations_through: as_of        # as_of | all_time
+    # A star citing their own work is not the field building on them, and
+    # self-citation rises with portfolio size — which is what we are measuring.
+    exclude_self_citations: true
+
+  # ---- THE NUMBER UNDER TEST -------------------------------------------
+  # The research design (§5.1) states a 5% floor. That is a HYPOTHESIS UNDER
+  # TEST at Checkpoint 2, NOT a fixed setting: the advisor's Task 3 tabulates
+  # four cutoffs across three field widths and the pair is chosen jointly.
+  # Treat 0.05 as a working value with no authority until then.
+  cutoff: 0.05
+  cutoffs: [0.01, 0.025, 0.05, 0.10]      # the columns of the Task 3 table
+
+  # ---- THE SAME GRID FOR THE INFLUENCE FAMILY (Task 3b) ----------------
+  # Task 3b is an exact mirror of Task 3 on the citation measures, so it needs
+  # its own columns. "Set wide on purpose -- nobody knows where the tail of
+  # these distributions is yet; the data speaks first."               [TL 3b]
+  #
+  # REACH runs an order of magnitude higher in level than count share, because
+  # it is an at-least-one indicator over the field's window patents rather than
+  # a share that sums to one: p90 is 0.003 at cpc_subclass but the maximum is
+  # 0.59. Hence a grid reaching 50% where the count grid stops at 10%.
+  reach_cutoffs: [0.05, 0.10, 0.25, 0.50]
+  #
+  # KNOWLEDGE-BASE SHARE partitions -- citation rows are the unit and they sum
+  # to one against the common denominator -- so it is on the same scale as
+  # count share and takes the same four columns. It is given its OWN key rather
+  # than reading `cutoffs` above, although the four values coincide today: a
+  # count-share cutoff and a knowledge-base-share cutoff are different economic
+  # objects that happen to agree numerically, and sharing one key would let a
+  # change to the Task 3 grid move the Task 3b grid silently.
+  kb_share_cutoffs: [0.01, 0.025, 0.05, 0.10]
+  #
+  # Both are also read by the citation step (04_citation_dominance.py, which
+  # is outside this extract), which uses the LOWEST of each to decide which
+  # unfloored rows to keep in 04_citation_candidates_<width>.parquet --
+  # the without-floor half of the Task 3b table, which the panel cannot supply
+  # because the floor is applied inside the build. Widening a grid here widens
+  # that file automatically.
+
+  # #1 share / #2 share explodes when the runner-up is near zero.      [TL 2]
+  margin_cap: 10
+
+  # The "towering figure" definition, largely independent of field width.
+  alternative_rule:
+    max_rank: 1
+    min_margin: 2.0
+    # Not decoration: in a large diffuse field a #1 at 0.6% against a #2 at
+    # 0.25% clears the margin while dominating nothing, and the tiny-field
+    # exclusion does not catch it because that field is not small, just spread
+    # thin.                                                            [TL 3]
+    min_share: 0.02
+
+  # Owning 30% of a field with 10 patents is not dominance of anything. The
+  # Task 3 table is produced BOTH with and without this exclusion.     [TL 3]
+  min_field_patents: 100
+
+  # Is a field-year holding EXACTLY the floor kept?
+  #   true  -> keep >= 100, i.e. it is "fewer than 100" that gets excluded
+  #   false -> keep >  100
+  #
+  # The task list says "fewer than ~100 patents", and the ~ makes this a reading
+  # rather than a transcription, so it is a setting rather than a line of
+  # Python. Moves 4 / 37 / 420 field-years at class / subclass / main group.
+  #
+  # It changes nothing in Task 2b item 1 — the largest field-year anywhere with
+  # a 100% top share holds six patents — and it matters in Task 3, where the
+  # floor decides which inventor x field pairs are counted at all.  [NEW, C-27]
+  min_field_patents_inclusive: true
+
+  # ---- THE FLOOR AS A PERCENTILE OF FIELD-YEAR SIZE      [NEW, advisor 2026-09-15] ----
+  # "Compute a fixed percentile for all fields and take it as the floor rather
+  # than an arbitrary number. 100 is an arbitrary number."
+  #
+  #   absolute    the floor is min_field_patents above, unchanged (the primary)
+  #   percentile  the floor is the floor_percentile-th percentile of the
+  #               distribution of field-year window sizes at this width,
+  #               interpolated (quantile_cont), and min_field_patents is not read
+  #
+  # Where 100 sits, pooled over 1986-2016: the 4th percentile at cpc_class, the
+  # 25th at cpc_subclass, the 78th at cpc_main_group. The 25th percentile is
+  # 673 / 97 / 7 patents at the three widths — so the same percentile is a very
+  # different number of patents, which is the point of measuring it.
+  #
+  # floor_scope, read only under percentile:
+  #   pooled    one percentile over every field-year at the width whose year lies
+  #             in deaths.year_min..deaths.year_max (the measurement years);
+  #             applied to every window-year, including the years outside that
+  #             range that step 04's loose rule looks back through
+  #   per_year  the percentile within each window-year separately, so a growing
+  #             field's floor rises with it and the pooled floor's drift with
+  #             calendar time is removed
+  #
+  # Both must be null under absolute mode: nothing reads them there, and a value
+  # left behind would move the hash without moving a floor (the subsample.which
+  # failure). The inclusive/exclusive boundary above applies to the implied
+  # floor exactly as to the absolute one. Step 03 computes the floor ONCE, stores
+  # clears_floor and floor_patents on every field-year, and every later step
+  # reads the stored flag — the count family, the citation family and Task 4
+  # cannot floor at different numbers because none of them computes one.
+  floor_mode: absolute                    # absolute | percentile
+  floor_percentile: null                  # e.g. 25 ; null under absolute
+  floor_scope: null                       # pooled | per_year ; null under absolute
+
+  apply_min_field_size: true
+  report_both_min_field_size: true
+
+
+
+# ---------------------------------------------------------------------------
+# THE FLOOR DIAGNOSTIC (step 02d)                       [NEW, advisor 2026-09-15]
+# ---------------------------------------------------------------------------
+# Where the absolute floor sits in the distribution of field-year window sizes,
+# and what floor each of these percentiles would imply in patents, per width,
+# pooled over the measurement years and per year. A table of a distribution,
+# not a choice: the floor a run applies is dominance.floor_mode above.
+floor_diagnostic:
+  percentiles: [10, 25, 50, 75]
+
+# ---------------------------------------------------------------------------
+# TASK 2 — the Checkpoint 1 figures
+# ---------------------------------------------------------------------------
+task2:
+  # All three widths are built in one run, because the whole point of Task 2 is
+  # to compare them. Each gets its own Parquet dataset.                [TL 2]
+  widths: [cpc_class, cpc_subclass, cpc_main_group]
+  histogram_bins: 50
+
+  # The supplementary histograms split field-years by how big the field is. The
+  # tiny-field exclusion does not arrive until Task 3, so the plain histogram
+  # contains fields where one person holds 100% of eight patents — which is not
+  # dominance, and which sits exactly in the right tail we are trying to read.
+  #   quartiles   four equal-sized groups of field-years, cut points reported
+  #   fixed_bins  the absolute cut points below, which are comparable across
+  #               widths in a way quartiles are not                    [NEW]
+  field_size_groups: quartiles            # quartiles | fixed_bins
+  field_size_fixed_bins: [25, 100, 1000]
+
+
+# ---------------------------------------------------------------------------
+# TASK 2b — the Checkpoint 1 follow-ups
+# ---------------------------------------------------------------------------
+# Nine questions the advisor added on 2026-08-02 after reading the Task 1-2
+# outputs. Answered one at a time; items 1 and 2 are built.
+task2b:
+  # Item 1 asks for the maximum top share once tiny fields are excluded. A
+  # maximum on its own is a number without a name, so the note also shows the
+  # field-years behind it — 57.97% means something once you can see it is
+  # C07C405/00, prostaglandins, 182 patents, sustained over two years.
+  item1_top_n: 5
+
+  # Item 1 also asks whether 100% sits at the top of a smooth tail or stands
+  # apart from everything else. These are the LOWER edges of the bands counted
+  # below 100%: 0.999-1, 0.90-0.999, 0.50-0.90. The answer at class and
+  # subclass is that the 0.90-0.999 band is empty, so a 100% share is a
+  # different object rather than an extreme case of the same one.       [NEW]
+  item1_share_bands: [0.50, 0.90, 0.999]
+
+  # Item 2 finds that ties at the top of a field are NOT removed by the
+  # 100-patent floor — 253 of 344 tied field-years at cpc_class clear it — but
+  # very nearly are once the dominance cutoff is applied as well. The survivors
+  # are few enough to name: 0 at class, 10 at subclass and 88 at main group at
+  # the working 5% cutoff. This caps how many the note lists, in field-size
+  # order, so that a count has faces behind it. It does not change any
+  # reported number; the complete list is in the CSV.            [NEW, C-30]
+  item2_top_n: 10
+
+  # Item 2's size groups and its floor and cutoff comparisons take their
+  # settings from elsewhere and add none of their own: task2.field_size_groups
+  # (so the crosstab and the Checkpoint 1 supplementary figures always mean the
+  # same thing by "Q1"), dominance.min_field_patents with its _inclusive
+  # boundary, and dominance.cutoffs with dominance.cutoff as the working value.
+  #
+  # Items 3, 4 and 5 add no key of their own either.
+
+  # Item 6 asks when a field is born, and no built table knows: under
+  # cpc.table: current every patent carries TODAY's code, so a subclass created
+  # in 2015 owns filings from 1976 (C-3, and B33Y in item 1). The one thing that
+  # dates a CODE rather than a patent is cpc_version_indicator in
+  # g_cpc_at_issue — the CPC scheme version a classification was made under.
+  #
+  # A plain minimum over it is wrong: B33Y carries one row tagged 2013-01-01
+  # among 38,805 tagged 2014-12-01, and the single stale row would date the
+  # field two years early. So a version counts only if it accounts for at least
+  # this share of the code's at-issue rows.
+  #
+  # It is a real choice, not a formality. Subclasses dated 2014-or-later come
+  # out 22 / 25 / 28 / 28 / 29 at thresholds 0 / 0.001 / 0.01 / 0.05 / 0.10, and
+  # the note reports that ladder rather than only the chosen value.
+  #
+  # The instrument is left-censored at CPC's own launch: 899 of 927 subclasses
+  # sit at 2013-01-01 and cannot be dated at all. That is a limit of the data,
+  # not of this setting.                                          [NEW, C-35]
+  item6_version_min_share: 0.01
+
+
+  # ---- THREE LITERALS C-44 DEFERRED, CLOSED HERE               [C-44] ----
+  # Each was classified "presentation" on a first pass and OVERTURNED by an
+  # adversarial second pass, on this repository's own precedent.
+
+  # Above this many fields, item 1's table aggregates to CPC section — B33Y
+  # folds into a row labelled "B" and the only in-note evidence for item 1's
+  # back-classification finding disappears while the prose claim survives.
+  # cpc_subclass sits at 30 of 40, so this is live, not decoration.
+  item1_field_rows: 40
+
+  # The same device in item 6, and the repository already ruled on it at C-30
+  # ("it caps a list, not a result") and made it a key anyway. At
+  # cpc_main_group 563 entering fields exceed this, so no field is ever named;
+  # cpc_subclass sits at 13, seventeen rows from flipping a named table into a
+  # section aggregate as a silent side effect of a window change.
+  item6_field_rows: 30
+
+  # Item 9 is the only follow-up that TYPES a verdict bar, against the Task 2b
+  # design's "no bar is set, anywhere". Below what disagreement rate is the
+  # counting method a robustness check rather than a different sample? That is
+  # a materiality judgement an economist would plausibly set at 5% or 10%, and
+  # it governs item 9's stated answer on whether the treated group survives
+  # counting.method — a live Checkpoint 2 decision. Both branches now print it.
+  item9_materiality: 0.01
+
+# ---------------------------------------------------------------------------
+# TASK 4 — deaths meet dominance
+# ---------------------------------------------------------------------------
+task4:
+  # Born before this, essentially everyone has died by 2016, so absence from
+  # the death file means missing data rather than survival. That is what makes
+  # the old-cohort coverage rate the number that matters.              [TL 4]
+  old_cohort_max_birth_year: 1935
+  birth_cohort_bin_years: 10                                   # [NEW, C-8]
+
+  # A career longer than this suggests the disambiguation merged two people
+  # into one ID — which manufactures a fake dominant inventor, and the fakes
+  # concentrate exactly in the treated group.                          [TL 4]
+  suspicious_career_years: 45
+
+  # ---- WHEN MUST DOMINANCE HOLD? --------------------------------------
+  # Task 4a reports two timing rules side by side and never one alone, so
+  # there is no key selecting between them. What IS a choice is how far the
+  # loose rule reaches back: "above the cutoff in at least one of the five
+  # windows ending in the death year or the four years before it".
+  #
+  # It is 5 and `windows.dominance_window_years` is also 5, and they are still
+  # two different fives. That one is how many filing years a measurement
+  # window spans; this one is how many measurement windows a death may look
+  # back through. Sharing a key would let a change to the measurement window
+  # silently redefine which deaths count as treated — the same reason
+  # `dominance.kb_share_cutoffs` got its own key rather than reading
+  # `dominance.cutoffs` while the four values coincide.
+  #
+  # The loose rule exists because a long final illness erodes a share
+  # mechanically before death, so the strict rule alone selects against
+  # exactly the deaths we can interpret best.                          [TL 4a]
+  loose_timing_span_years: 5
+
+  # ---- DEATHS WITH NO BIRTH YEAR --------------------------------------
+  # 47,430 of the 402,091 deaths carry no usable birth year, so they have no
+  # age and no age cap can be applied to them. Where they go changes what the
+  # "any age" column means:
+  #
+  #   counted_with_column  any age = every death, and a FOURTH column reports
+  #                        how many of them had no age at all.
+  #   counted_silently     any age = every death, with no column saying so.
+  #   excluded             any age = any KNOWN age, so all the age columns
+  #                        share one population and compare directly.
+  #
+  # counted_with_column, decided with Yaren 2026-09-06. Task 3d measured that
+  # between 38 and 61 percent of dominant exposure belongs to inventors with
+  # no recoverable birth year and called it the largest single loss the design
+  # carries; the Checkpoint 2 obituary search is priced partly on recovering
+  # those years. A number that decides a search does not belong in a footnote.
+  #                                                        [TL 4a, TD §2(ix)]
+  undatable_age_reporting: counted_with_column
+
+  # ---- THE DOSE: WHOM IS THE PERCENTILE RANKED AGAINST? ---------------
+  # The design's dose is the within-measurement-year percentile rank (TD §6.2).
+  # Within-year, not within-field, and the two are not interchangeable:
+  #
+  #   all_rows        every panel row measured that year, across all fields.
+  #                   What `04_citation_dominance.py` already stores in
+  #                   `<measure>_within_year_percentile`, so both families are
+  #                   measured the same way.
+  #   floored_fields  only rows in fields clearing `min_field_patents`. Fewer
+  #                   near-zero rows, so the treated spread further below the
+  #                   99th percentile — at the cost of disagreeing with the
+  #                   percentile the citation panel already holds, which would
+  #                   then have to be recomputed too.
+  #
+  # floored_fields, corrected 2026-09-06 (C-106), having been all_rows for one
+  # afternoon. The reason is CONSISTENCY and not spread. The citation step
+  # (04_citation_dominance.py, outside this extract) applies
+  # `dominance.min_field_patents` inside its build, so the citation panel holds
+  # floored rows only and the DEPENDENCE percentile is already a rank among
+  # floored rows. Measured at t=2010, cpc_subclass: 0 of the citation panel's
+  # 3,139,699 rows sit below the floor, against 12,347 of the occupancy panel's
+  # 1,557,564. Under all_rows the two families' doses were ranks over different
+  # populations while carrying the same column name — and the guard comparing
+  # them compared the SQL text, which was identical, so nothing said so.
+  #
+  # IT MAKES THE COMPRESSION WORSE, and that is recorded rather than traded
+  # away. The treated span at cpc_subclass, strict, share >= 1% falls from
+  # 0.0167 to 0.0040, and at 5% from 0.0005 to 0.0000. Flooring removes TINY
+  # fields, which is where high shares live — 30% of a ten-patent field — so
+  # removing them removes the competition above the treated. The first
+  # recommendation here reasoned the opposite way and was wrong.
+  #
+  # WITHIN-FIELD standing is a different object and is already carried, as the
+  # margin. A within-field rank is stored beside the percentile regardless —
+  # rule 4 — so Checkpoint 2 can compare the two without a rebuild.
+  #
+  # Why within-field is not the percentile: the 14,671 floored subclass
+  # field-years of 1986-2016 hold between 88 and 166,851 inventors, quartiles
+  # 404 / 894 / 2,268 — a 1,900-fold range. So a within-field percentile
+  # measures how crowded the field is rather than how large the star is.
+  # Measured on the treated:
+  # the four occupancy deaths at subclass 5% strict all sit at 0.99–1.00 of
+  # their own field. The same failure the cell-mean dose already showed, which
+  # drifts 4.3x on cell size alone and collapses to 1.04 under a fixed-size
+  # denominator (TD §2(vii)).                             [TL 4a, TD §6.2]
+  dose_percentile_population: floored_fields
+
+  # ---- THE TYPE SPLIT: AT WHICH CUTOFFS? ------------------------------
+  # Every death is occupancy-dominant only, dependence-dominant only, or both,
+  # and "both" cannot be defined without a cutoff on each family. Checkpoint 2
+  # has not picked those cutoffs.
+  #
+  #   every_cutoff_pair  report the three-way split at every combination of
+  #                      `cutoffs` x `reach_cutoffs` / `kb_share_cutoffs`.
+  #   working_pair       one table at the design's working 5% / reach 5%.
+  #
+  # every_cutoff_pair, decided with Yaren 2026-09-06, because the task list
+  # says only Task 4 runs wide and the both-arms, all-cutoffs grid stops at
+  # Checkpoint 2. working_pair would pre-commit to cutoffs the advisor
+  # deferred — and at 5% the occupancy family has four events at subclass, so
+  # the working pair is exactly the cell least able to carry a decision.
+  #                                                       [TL 4a, TL CP2]
+  type_split_grid: every_cutoff_pair
+
+  # ---- AGES THAT CANNOT BE RIGHT --------------------------------------
+  # Step 02 computes age at death and flags only the logically impossible
+  # case, age < 0, saying in its own comment that "which ages are usable is
+  # Task 4's decision". This is that decision, and it is deliberately narrow.
+  #
+  # The bounds are LOGICAL, not behavioural. 0 because a person cannot die
+  # before being born. 125 because the longest verified human life was 122
+  # years; an age above this is a birth year that failed to parse, not a
+  # long-lived inventor.
+  #
+  # HOW SMALL THIS IS, COUNTED WHERE IT MATTERS. The population figure — 1
+  # negative age and 80 above 120 among the 354,661 deaths that have an age —
+  # is not the number that governs anything, because a defect nobody in the
+  # treated sample carries changes no result. Inside the treated cells, with
+  # the floor, the whole of it is TWO PEOPLE: one at cpc_subclass and one at
+  # cpc_main_group, both only under the LOOSE timing rule and both only at the
+  # 1% cutoff, each carrying an age of 149. Under strict timing there are
+  # none, at any width or cutoff; above 1% there are none under either rule.
+  #
+  # So the key is kept for two reasons and neither is the size of the problem.
+  # First, an unflagged 149-year-old sits inside the any-age column, which is
+  # the column Checkpoint 2 reads to price the cap. Second, the 1% cutoff is
+  # where design v2 SS6.1 expects the occupancy channel to have to live, so
+  # the one cell the defect appears in is the cell most likely to be used.
+  #
+  # NOBODY IS DROPPED FOR IT. The flag is stored and reported; whether an
+  # implausible age is excluded, or its death recovered by hand from an
+  # obituary, is a Checkpoint 2 decision alongside the cap itself. Rule 4.
+  #
+  # What this does NOT settle is the young end, and there is no key for it.
+  # The youngest treated death is 13 at cpc_main_group under loose timing at
+  # 1%, and 15 under strict; at cpc_subclass it is 18 and 19. Above the 1%
+  # cutoff the youngest is 19 and there is nothing to explain. Whether a
+  # teenage inventor is an error or a fact is advisor question Q39 (371
+  # inventors filed in their birth year, 21,490 before turning 18), so the
+  # step MEASURES the youngest and oldest death in every cell rather than
+  # testing against a bound. A measured minimum gives Q39 its number without
+  # answering Q39 by side effect.                                     [TL 4a]
+  age_at_death_plausible_range: [0, 125]
+
+
+# ---------------------------------------------------------------------------
+# TASK OVERLAP — overlap and nesting of the two selections   [NEW, Yaren 2026-09-19]
+# ---------------------------------------------------------------------------
+# Yaren's own brief of 2026-09-19, not an advisor task, so it carries no [TL n]
+# tag. Read by src/steps/05f_task_overlap.py and by nothing else. Every number
+# the brief fixes lives here so that the step types none of them (rule 1). The
+# cutoff grids themselves are dominance.cutoffs, dominance.reach_cutoffs and
+# dominance.kb_share_cutoffs above; this block adds only what the brief adds.
+task_overlap:
+  # THE ERA SPLIT. Each era starts at the year given and ends the year before
+  # the next era starts; the last era runs to deaths.year_max. The first must
+  # equal deaths.year_min. Reading chosen 2026-09-19: the overlap grids are
+  # RECOMPUTED inside each era, so "dominant in both" inside an era means both
+  # cutoffs cleared inside that era's years. A pair share-dominant in 1992 and
+  # reach-dominant only in 2001 is "both" in no era.
+  era_start_years: [1986, 1996, 2006]
+
+  # THE LAG TABLE. Of the pair-years occupancy-dominant at t, the share that is
+  # dependence-dominant at t + k, for k from -lag_years to +lag_years. Rates are
+  # taken over ASSESSABLE pair-years only: t + k must lie inside the death
+  # window, otherwise the pair-year is left out of that k rather than counted
+  # as "not dominant" (reading chosen 2026-09-19).
+  lag_years: 10
+  # The cutoff pairs the lag table is printed at: every share cutoff here
+  # against every reach and every kb_share cutoff here. Each value must be a
+  # member of its family's grid above, and the config refuses one that is not.
+  lag_share_cutoffs: [0.01, 0.05]
+  lag_reach_cutoffs: [0.05]
+  lag_kb_share_cutoffs: [0.01, 0.05]
+
+  # THE MATCHED-PERCENTILE OVERLAP. Inside each floored field-year the top
+  # fraction p of inventors by share, by reach and by kb_share, ranked over the
+  # union of the two panels with zeros for rows absent from one of them.
+  matched_top_fractions: [0.005, 0.01, 0.02, 0.05, 0.10]
+
+  # The points every conditional distribution is printed at.
+  distribution_percentiles: [0.10, 0.25, 0.50, 0.75, 0.90]
+
+  # "Within the top k" in the top-inventor rank tables (Table 6.1 extended).
+  top_ranks: [3, 10]
+
+
+# ---------------------------------------------------------------------------
+# TASK 5 — describing the treated group
+# ---------------------------------------------------------------------------
+task5:
+  employer_window_years: 5                # most frequent assignee, last 5 years
+  multi_death_field_window_years: 10      # two deaths this close in one field
+                                          # cannot be clean controls for each
+                                          # other — flag them          [TL 5]
+
+
+# ---------------------------------------------------------------------------
+# TASK 6 — can we tell the star types apart?
+# ---------------------------------------------------------------------------
+task6:
+  living_sample_size: 300                 # "a few hundred is plenty"  [TL 6]
+  reference_year_min: 1986                # pseudo-dates for the living
+  reference_year_max: 2016
+
+
+# ---------------------------------------------------------------------------
+# TASK 7 — control fields
+# ---------------------------------------------------------------------------
+# Starting values, explicitly not commitments: if they turn out too tight or
+# too loose we adjust them together.                                   [TL 7]
+task7:
+  match_same_cpc_section: true
+  field_size_ratio_max: 2.0               # 5-year patent count within 2x
+  dominance_ratio_max: 2.0                # top inventor's share within 2x
+  no_death_within_years: 5
+
+  # The design (§5.2) also wants HHI, pre-trend and calendar-year matching.
+  # The task list starts with the three above. Not activated until Task 7 is
+  # discussed — declared here so nobody has to remember they exist.
+  match_on_hhi: false
+  match_on_pretrend: false
+  calendar_year_tolerance: null
+  purge_cpc_overlapping_controls: false
+
+
+# ---------------------------------------------------------------------------
+# TASK 8 — power check with fake deaths
+# ---------------------------------------------------------------------------
+task8:
+  n_events_grid: [100, 250, 500, 750]                                # [TL 8]
+  # The spread of the estimates IS the standard error, so this sets how
+  # precisely the minimum detectable effect is known.           [NEW, C-9]
+  n_replications: 500
+  # 1.96 + 0.84 = 80% power at a 5% two-sided test. Written as a constant
+  # because deriving it would need scipy, which is not in the stack.   [TL 8]
+  mde_multiplier: 2.8
+  # Azoulay et al. found +8.6% (non-collaborators) and -20.7% (collaborators)
+  # in science. These are the reference lines on the power figure.     [TL 8]
+  reference_effects: [0.086, 0.207]
+
+
+# ---------------------------------------------------------------------------
+# TASK 9 — firm-level feasibility
+# ---------------------------------------------------------------------------
+task9:
+  rival_active_window_years: 5
+  rival_min_patents: 1                    # a deliberately low bar    [NEW, C-10]
+
+
+# ---------------------------------------------------------------------------
+# TASK 2C — citation-based dominance, the influence family        [TL 2c]
+# ---------------------------------------------------------------------------
+# Count share measures OCCUPANCY: what fraction of a field's documents you
+# file. This block measures DEPENDENCE: how much of the field builds on what
+# you made. The theory is about dependence; Checkpoint 1 measured occupancy.
+#
+# Every key here was decided by the Checkpoint 1b panel, C-48 to C-52, all
+# PROVISIONAL pending the advisor's confirmation. The panel is not the advisor.
+task2c:
+  # There is deliberately NO `compute:` switch here, and the reasoning is worth
+  # keeping because the design spec proposed one on C-18's precedent.
+  #
+  # C-18 armed `dominance.compute_citation_share` when the measure did not
+  # exist, so that setting it true would RAISE rather than silently do nothing.
+  # That is the right device for a key whose measure is missing. Once the
+  # citation step (outside this extract) exists the device is spent: the key
+  # stops being a guard and becomes a hashed on/off switch, and because every
+  # key except paths.* and runtime.* is in the config hash, flipping it would
+  # restamp the project and mark steps 02, 03 and 04 stale, along with 02b
+  # and 02c outside this extract — a full rebuild to turn on a step that
+  # writes NEW tables and changes no existing number.
+  #
+  # No other task carries one. Task 2 and Task 3 are run by running them, and
+  # so is this. C-44 reached the same end state for `subsample.which`:
+  # "Deleting the key is the right end state."
+
+  # Class was dropped at Checkpoint 1 — nothing lives there.          [TL 2c]
+  widths: [cpc_subclass, cpc_main_group]
+
+  # dominance.first_compute_year (1980) is right for a FLOW measure and
+  # meaningless for a stock: at t=1980 there are 0.65 visible backward
+  # citations per window patent. The citation family needs its own floor.
+  # 1986 is the first usable death year, so nothing is lost by it.  [C-46 D89]
+  first_compute_year: 1986
+
+  # ---- WHAT IS STORED, AND WHAT DEFINES TREATMENT             [C-49] ----
+  # Four objects off one aggregation. The panel eliminated four candidate
+  # cutoff rules and could not choose between the two survivors without a
+  # number Task 3b has not produced, so NO cutoff is applied at Checkpoint 1b
+  # and the grid is reported instead. Rule 4 in its natural form.
+  store_objects: [raw_level, ratio_to_field_year_mean, within_year_percentile, field_year_margin]
+
+  # false = store everything continuous and let sample selection filter later.
+  # Setting this true without first choosing a rule at Checkpoint 1b would
+  # reinstate exactly the pooled cutoff C-49 D97 eliminated.
+  apply_cutoff: false
+
+  #   none                    raw levels only
+  #   ratio_to_field_year     Hall-Jaffe-Trajtenberg's rescaling, and the
+  #                           citation analogue of the dominance margin
+  #   within_year_percentile  removes calendar drift, imports population growth
+  # The dose is normalised; SELECTION is not, because dominance is a
+  # within-field property and a cell mean is a between-field statistic.
+  normalisation: ratio_to_field_year          # none | ratio_to_field_year | within_year_percentile
+
+  # A cohort with ONE treated event contributes zero variation after
+  # within-cohort demeaning and is silently dropped, which would delete the
+  # early cohorts whose thinness is already the complaint. Annual granularity
+  # is unaffordable; five or ten years is the honest choice.       [C-49 D101]
+  cohort_bin_years: 5
+
+  # ---- WHICH MEASURE CARRIES WHAT                             [C-48] ----
+  # Knowledge-base share is a ratio of citation ROWS, so proportional
+  # reference inflation cancels top and bottom. Reach is an at-least-one
+  # indicator and saturates: over 1996-2016 the top-inventor level drifts
+  # x1.102 on kb against x1.426 on reach, same fields, same years.
+  primary_measure: kb_share                   # kb_share | reach
+  kill_condition_measure: kb_share_fractional
+
+  # Citation ROWS partition; distinct citing patents do not. Fractional kb
+  # sums to <= 1 only against the COMMON denominator (design spec 4.5), so the
+  # margin that carries the kill condition is computed against it and the
+  # entry says which denominator it used.                          [C-52]
+  margin_denominator: common                  # common | per_inventor
+
+  # ---- THE DENOMINATOR                                        [C-50] ----
+  # "All backward citations made by the field's window patents" cannot be
+  # computed: 30,957,950 of 152,631,929 raw rows (20.28%) point at a cited
+  # patent outside the universe. Naming the restriction makes it a stated
+  # choice rather than the residue of step 02's cited-side filter, and keeps
+  # numerator and denominator commensurable.
+  kb_denominator: in_universe_1976plus        # in_universe_1976plus
+
+  # The truncation that SURVIVES a stated denominator is inventor-level, not
+  # calendar: a star whose career began before 1976 has a censored corpus and
+  # is measured as less influential than she was. The population a cutoff
+  # selects is 1.2-1.6x more likely to be censored than the credited
+  # population, IN EVERY YEAR, and career start correlates with age at death.
+  # No year effect, no field-year cell and no rank can reach it. Flag it and
+  # report the dose split on the flag rather than dropping the group, which
+  # would select against exactly the senior inventors who die in the window.
+  flag_corpus_left_censored_before: 1978
+
+  # ---- THE PROSECUTION-WINDOW LEAK                            [C-51] ----
+  # A reference list is not closed at filing; it closes at grant. Between 43%
+  # and 71% of a field's window patents are still in prosecution at t, and
+  # that exposure itself drifts x1.95-2.03. So a pre-death dose is built partly
+  # from references created AFTER the death, in a literature that exists
+  # because death changes citation behaviour — reverse causality in the
+  # regressor, which does not attenuate.
+  #
+  #   filing        the project's convention everywhere else       [TL 1]
+  #   grant_strict  citing patent granted <= t, so its reference list
+  #                 provably closed before t. A DIFFERENT POPULATION, not a
+  #                 bound: patents granted inside the window are selected on
+  #                 short pendency. Report it as "the result survives on the
+  #                 sub-sample whose reference lists closed before the death".
+  citing_admission: filing                    # filing | grant_strict
+
+  # A patent cannot be CITED before it is GRANTED. The stated no-look-ahead
+  # rule admits an edge when both filing years are <= t, which lets in
+  # 1.1-4.4% of edges that could not physically have existed at t. Strictly
+  # stronger than the advisor's rule, so it subsumes rather than contradicts
+  # it. Applies to EDGE ADMISSIBILITY, never to corpus membership: a patent
+  # filed 2005 and granted 2009 IS in the star's corpus at t=2006.  [C-51 D106]
+  #
+  # RE-MEASURED 2026-08-11 over all 31 years: 1.14% (1992) to 4.35% (2001).
+  # C-51 D106 and the earlier wording here said "1.4-3.1%", which is the range
+  # across the FOUR years D106 sampled (1986, 1996, 2006, 2016) and not the
+  # range over the sample. Those four values are right; the summary was not.
+  # The bite is NOT monotone and peaks at 2001, which matters: a rule whose
+  # effect varies with the calendar is the shape C-46 is about.
+  #
+  # Set to false to admit an edge on the cited patent's FILING year, which is
+  # the prototype rule Chapter 5's figures were produced under. Flipping it
+  # moves the config hash and forces a full rebuild of the cascade, so it is a
+  # version bump and not a toggle.
+  #
+  # NOT SETTLED, and the open part is not in D106: whether a pending
+  # application is citable at all CHANGES INSIDE THE SAMPLE. US applications
+  # were secret until grant before the AIPA's 18-month pre-grant publication
+  # took effect in March 2001, and public 18 months after filing afterwards.
+  # So `true` is close to exactly right for the early sample and over-strict
+  # for the late one. It bites hardest at 2001, which is where the regime
+  # changes. Q29 in notes/questions_for_advisor.md.
+  cited_must_be_granted_by_t: true
+
+  # Date the dose at t = death_year - k. At k=2 the share of window patents
+  # still in prosecution roughly halves, and it also addresses illness
+  # anticipation and the prosecution of the star's own final filings.
+  # 0 = date at the death year, which is Task 4a's strict rule as written.
+  dose_lag_years: 0
+
+  # ---- CREDITING                                              [C-52] ----
+  # Full credit is primary and is the definition of reach              [TL 2c].
+  # The fractional VARIANT has no natural form, because reach counts distinct
+  # citing patents rather than credit: summing 1/n lets one citing patent
+  # contribute more than one patent and breaks the [0,1] bound the task list
+  # states. max(1/n) is the strongest single dependence link — it preserves
+  # the bound STRUCTURALLY, and reduces to full credit when the star has a
+  # solo patent among those cited.
+  #
+  # It breaks NOT ONE co-inventor tie, and the task list attaches that problem
+  # to this rule. Two inventors who co-authored the same patents receive
+  # identical max(1/n). The tie needs a per-star covariate at Task 4c.
+  reach_fractional_rule: max_credit           # max_credit | mean | sum
+
+  # ---- FIELD-YEAR ADMISSIBILITY                        [C-50, found] ----
+  # A window patent with no usable backward citation sits in the reach
+  # denominator and can never enter the numerator. That share is a U, not a
+  # hump: 16.60% at t=1986, 2.76% at 2003, 13.61% at 2016 — so it binds
+  # HARDEST at the start of the death window. It is field-specific (p90 16.0%,
+  # max 32.1% at t=2016) and concentrates in large fields, so no year effect
+  # and no within-year rank removes it. Field-years below this share are
+  # dropped through funnel.filter with a written why-sentence.
+  # 0.0 = screen off, which is the current behaviour.
+  min_usable_reference_share: 0.0
+
+
+
+
+# ---------------------------------------------------------------------------
+# ESTIMATION — declared now so the panels are built for it, not run yet
+# ---------------------------------------------------------------------------
+estimation:
+  # One person dominating three fields is ONE event, so inference clusters at
+  # the death, not the inventor x field pair. Every panel carries a death-level
+  # ID so that an event-cohort stack can be built without reshaping. [TD §5.2]
+  cluster_level: death                    # death | inventor_field | field
+  stacked: true                           # staggered-adoption-robust stacking
+
+
+# ---------------------------------------------------------------------------
+# SUBSAMPLE                                                         [TD §5.4]
+# ---------------------------------------------------------------------------
+# The baseline is everything. The pharma spotlight is where a single dominant
+# approach can genuinely crowd out alternatives and enforcement is observable;
+# semiconductors are the deliberate contrast, where dense patent thickets
+# should make gatekeeping most person-independent.
+subsample:
+  which: all                              # all | pharma | semiconductors
+  pharma_cpc:        [A61K, A61P, C07D, C12N]                # [NEW, C-11]
+  semiconductor_cpc: [H01L, G11C]                            # [NEW, C-11]
+
+
+# ---------------------------------------------------------------------------
+# REPORTING THRESHOLDS
+# ---------------------------------------------------------------------------
+# These decide what the printed checkpoint summary SAYS. They are not
+# analytical settings, but they are numbers, so they live here too rather than
+# in the code.
+checkpoints:
+  treated_comfortable: 300                # 300+ deaths = comfortable  [TL CP2]
+  treated_workable_min: 100               # 100-300 = dose-response leads
+  correlation_collapse: 0.80              # above this the star roles cannot be
+                                          # separated                 [TL CP3]
+  task7_min_candidates: 5                                             # [TL 7]
+  task8_mde_concern: 0.10                 # MDE far above this = redesign [CP4]
+
+  # The printed precision of every reported share. It was DUPLICATED verbatim
+  # in src/04_select_dominant_inventors.py and in task2b/item9.py (outside
+  # this extract) so the two tables would round alike; two copies of one
+  # presentational choice can diverge silently
+  # and nothing would catch it.                                    # [C-44]
+  share_decimals: 6
+
+
+# ---------------------------------------------------------------------------
+# RUNTIME — how the machine is used, not what is computed
+# ---------------------------------------------------------------------------
+# Deliberately EXCLUDED from the config hash (see NOT_IN_HASH in
+# src/lib/config.py), because changing a memory limit cannot change a number and
+# must not change an output filename. This is the only block in this file that
+# is not an analytical choice.
+#
+# This machine has 8 GB of RAM. The limit is set below it so that DuckDB spills
+# to disk rather than being killed; the temp directory must sit on a disk with
+# room to spill. Task 2 at main-group width is the largest computation so far.
+runtime:
+  duckdb_memory_limit: 2GB
+  duckdb_temp_directory: data/interim/duckdb_tmp
+  duckdb_threads: null                    # null = every core
