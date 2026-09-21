@@ -944,7 +944,7 @@ task4:
   #   excluded             any age = any KNOWN age, so all the age columns
   #                        share one population and compare directly.
   #
-  # counted_with_column, decided with Yaren 2026-09-06. Task 3d measured that
+  # counted_with_column, decided 2026-09-06. Task 3d measured that
   # between 38 and 61 percent of dominant exposure belongs to inventors with
   # no recoverable birth year and called it the largest single loss the design
   # carries; the Checkpoint 2 obituary search is priced partly on recovering
@@ -1008,7 +1008,7 @@ task4:
   #                      `cutoffs` x `reach_cutoffs` / `kb_share_cutoffs`.
   #   working_pair       one table at the design's working 5% / reach 5%.
   #
-  # every_cutoff_pair, decided with Yaren 2026-09-06, because the task list
+  # every_cutoff_pair, decided 2026-09-06, because the task list
   # says only Task 4 runs wide and the both-arms, all-cutoffs grid stops at
   # Checkpoint 2. working_pair would pre-commit to cutoffs the advisor
   # deferred — and at 5% the occupancy family has four events at subclass, so
@@ -1058,9 +1058,9 @@ task4:
 
 
 # ---------------------------------------------------------------------------
-# TASK OVERLAP — overlap and nesting of the two selections   [NEW, Yaren 2026-09-19]
+# TASK OVERLAP — overlap and nesting of the two selections   [NEW, 2026-09-19]
 # ---------------------------------------------------------------------------
-# Yaren's own brief of 2026-09-19, not an advisor task, so it carries no [TL n]
+# My own addition of 2026-09-19, not an advisor task, so it carries no [TL n]
 # tag. Read by src/steps/05f_task_overlap.py and by nothing else. Every number
 # the brief fixes lives here so that the step types none of them (rule 1). The
 # cutoff grids themselves are dominance.cutoffs, dominance.reach_cutoffs and

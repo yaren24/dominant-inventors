@@ -275,7 +275,7 @@ SCHEMA = {
     "task4.age_at_death_plausible_range": {"type": list, "item_type": int,
                                            "item_min": 0, "item_max": 200},
 
-    # Yaren's overlap-and-nesting brief of 2026-09-19. The era starts, the lag
+    # My overlap-and-nesting brief of 2026-09-19. The era starts, the lag
     # cutoffs and the first era's position are pinned to other keys in
     # _check_consistency below; here each value is checked on its own.
     "task_overlap.era_start_years": {"type": list, "item_type": int,
@@ -823,7 +823,7 @@ def _check_consistency(values):
     # years. Whether they fit THIS death window is checked by the step that reads
     # them (`eras()` in src/steps/05f_task_overlap.py), not here: a robustness config
     # that shortens the window for another step must still load. Likewise the lag
-    # cutoffs' membership of the grids.                              [Yaren 2026-09-19]
+    # cutoffs' membership of the grids.                                    [2026-09-19]
     eras = values["task_overlap"]["era_start_years"]
     if not eras or any(later <= earlier for earlier, later in zip(eras, eras[1:])):
         problems.append(

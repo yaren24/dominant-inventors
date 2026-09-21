@@ -647,7 +647,7 @@ def collapse_duplicate_edges(con, cfg, funnel, received):
 # 5. KJL: linking identities, birth years, deaths
 # ---------------------------------------------------------------------------
 
-# WHICH ROUTE OWNS A KJL IDENTITY WHEN THE TWO DISAGREE. Decided by Yaren on
+# WHICH ROUTE OWNS A KJL IDENTITY WHEN THE TWO DISAGREE. Decided on
 # 2026-09-07, on the measurement in `outputs/default/task4b_ladder.csv`: the
 # crosswalk route, which reads both identities off one row of PatentsView's own
 # release table and assumes nothing about inventor slot order. The coordinate
